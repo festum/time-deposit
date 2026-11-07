@@ -1,0 +1,118 @@
+{
+  "components": {
+    "schemas": {
+      "DepositResponse": {
+        "properties": {
+          "balance": {
+            "title": "Balance",
+            "type": "number"
+          },
+          "days": {
+            "title": "Days",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "planType": {
+            "title": "Plantype",
+            "type": "string"
+          },
+          "withdrawals": {
+            "items": {
+              "$ref": "#/components/schemas/WithdrawalResponse"
+            },
+            "title": "Withdrawals",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "planType",
+          "balance",
+          "days",
+          "withdrawals"
+        ],
+        "title": "DepositResponse",
+        "type": "object"
+      },
+      "WithdrawalResponse": {
+        "properties": {
+          "amount": {
+            "title": "Amount",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "timeDepositId": {
+            "title": "Timedepositid",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "timeDepositId",
+          "amount",
+          "date"
+        ],
+        "title": "WithdrawalResponse",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "Time Deposit API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/time-deposits": {
+      "get": {
+        "description": "Returns every stored time deposit with its plan type, current balance, days, and withdrawal history. Balances and withdrawal amounts are JSON numbers; dates are ISO `YYYY-MM-DD`. Deposit `days` stays as stored; withdrawals are historical records already reflected in the stored balance. An empty database returns an empty array.",
+        "operationId": "listTimeDeposits",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DepositResponse"
+                  },
+                  "title": "Response Listtimedeposits",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List all time deposits"
+      }
+    },
+    "/time-deposits/update-balances": {
+      "post": {
+        "description": "Applies exactly one monthly accrual to every stored deposit, in a single transaction that locks the deposit rows. Interest is monthly: basic 1%, student 3% while under 366 days, premium 5% after 45 days; no interest applies within the first 30 days, and an unknown plan type earns none. Deposit `days` never changes and withdrawal rows are not touched. The call is not idempotent: each success adds another accrual permanently. Responds with an empty body.",
+        "operationId": "updateTimeDepositBalances",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Apply one monthly interest accrual to every deposit"
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "http://localhost:8080"
+    }
+  ]
+}
