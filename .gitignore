@@ -12,3 +12,5 @@ package-lock.json
 .pytest_cache/
 .env
 .coverage
+coverage.xml
+htmlcov/

@@ -14,6 +14,7 @@ dev = [
     "pytest",
     "httpx",
     "testcontainers[postgres]",
+    "pytest-cov>=7.1.0",
 ]
 
 [tool.uv]
@@ -21,3 +22,23 @@ package = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+addopts = ["--cov", "--cov-report=term-missing"]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "api",
+    "application",
+    "export_openapi",
+    "interest_policies",
+    "postgres",
+    "time_deposit",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 95
+exclude_also = [
+    "if __name__ == .__main__.:",
+]
