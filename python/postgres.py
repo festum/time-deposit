@@ -1,13 +1,51 @@
 from __future__ import annotations
 
+import threading
 from collections.abc import Sequence
 from decimal import Decimal
 from typing import Self
 
 import psycopg
+from psycopg_pool import ConnectionPool
 
 from application import DepositRepository, DepositView, Withdrawal
 from time_deposit import TimeDeposit
+
+POOL_MIN_SIZE = 1
+POOL_MAX_SIZE = 10
+
+
+class ConnectionPools:
+    """One process-wide pool per database URL, opened on first use."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._pools: dict[str, ConnectionPool] = {}
+
+    def get(self, database_url: str) -> ConnectionPool:
+        with self._lock:
+            pool = self._pools.get(database_url)
+            if pool is None:
+                pool = ConnectionPool(
+                    database_url,
+                    min_size=POOL_MIN_SIZE,
+                    max_size=POOL_MAX_SIZE,
+                    open=False,
+                    name=f'time-deposit-{len(self._pools)}',
+                )
+                pool.open()
+                self._pools[database_url] = pool
+            return pool
+
+    def close_all(self) -> None:
+        with self._lock:
+            pools = list(self._pools.values())
+            self._pools.clear()
+        for pool in pools:
+            pool.close()
+
+
+POOLS = ConnectionPools()
 
 
 class PostgresDepositRepository:
@@ -59,15 +97,17 @@ class PostgresDepositRepository:
 
 
 class PostgresUnitOfWork:
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, pools: ConnectionPools | None = None) -> None:
         self._database_url = database_url
-        self._context: psycopg.Connection | None = None
+        self._pools = pools if pools is not None else POOLS
+        self._context = None
+        self._connection: psycopg.Connection | None = None
         self.repository: DepositRepository
 
     def __enter__(self) -> Self:
-        self._context = psycopg.connect(self._database_url)
-        connection = self._context.__enter__()
-        self.repository = PostgresDepositRepository(connection)
+        self._context = self._pools.get(self._database_url).connection()
+        self._connection = self._context.__enter__()
+        self.repository = PostgresDepositRepository(self._connection)
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> bool | None:
