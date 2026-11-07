@@ -1,0 +1,44 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: time_deposit
+      POSTGRES_USER: time_deposit
+      POSTGRES_PASSWORD: time_deposit
+    ports:
+      - "5432:5432"
+    volumes:
+      - time-deposit-data:/var/lib/postgresql/data
+      - ./python/sql/001_init.sql:/docker-entrypoint-initdb.d/001_init.sql:ro
+      - ./python/sql/002_seed.sql:/docker-entrypoint-initdb.d/002_seed.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U time_deposit -d time_deposit"]
+      interval: 5s
+      retries: 10
+
+  api:
+    build: ./python
+    environment:
+      DATABASE_URL: postgresql://time_deposit:time_deposit@db:5432/time_deposit
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  swagger:
+    image: swaggerapi/swagger-ui
+    environment:
+      SWAGGER_JSON: /contract/openapi.json
+      PORT: "8080"
+      BASE_URL: /
+    volumes:
+      - ./python/openapi.json:/contract/openapi.json:ro
+      - ./python/swagger-nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - api
+
+volumes:
+  time-deposit-data:
