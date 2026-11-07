@@ -1,3 +1,6 @@
+from interest_policies import INTEREST_POLICIES
+
+
 class TimeDeposit:
     def __init__(self, id, planType, balance, days):
         self.id = id
@@ -11,14 +14,7 @@ class TimeDepositCalculator:
     def update_balance(self,xs):
         for td in xs:
             interest = 0
-            if td.days > 30:
-                if td.planType == 'student':
-                    if td.days < 366:
-                        interest += (td.balance * 0.03)/12
-                elif td.planType == 'premium':
-                    if td.days > 45:
-                        interest += (td.balance * 0.05)/12
-                elif td.planType == 'basic':
-                    interest += (td.balance * 0.01) / 12
+            policy = INTEREST_POLICIES.get(td.planType)
+            if policy is not None:
+                interest += policy.interest(td)
             td.balance = round(td.balance + ((interest * 100) / 100), 2)
-
