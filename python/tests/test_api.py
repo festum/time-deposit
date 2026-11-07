@@ -11,6 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from testcontainers.community.postgres import PostgresContainer
 
+import export_openapi
 import postgres
 from api import create_app
 from application import TimeDepositService
@@ -203,6 +204,24 @@ def test_listing_does_not_write(seeded, client, database_url):
 
     with psycopg.connect(database_url) as independent:
         assert stored_rows(independent) == before
+
+
+def test_default_wiring_reads_database_url(seeded, database_url, monkeypatch):
+    monkeypatch.setenv('DATABASE_URL', database_url)
+
+    with TestClient(create_app()) as client:
+        response = client.get('/time-deposits')
+
+    assert response.status_code == 200
+    assert [entry['id'] for entry in response.json()] == [1, 2, 3, 4, 5]
+
+
+def test_openapi_export_reproduces_the_committed_contract(tmp_path):
+    target = tmp_path / 'openapi.json'
+
+    export_openapi.main(target)
+
+    assert target.read_text(encoding='utf-8') == OPENAPI_JSON.read_text(encoding='utf-8')
 
 
 def test_empty_database(database_url):
