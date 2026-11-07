@@ -154,26 +154,27 @@ Rounding happens exactly once, inside `TimeDepositCalculator.update_balance`, at
 
 ### Scaling limits
 
-Measured on a local Docker Desktop PostgreSQL 16 container, one deposit per row, `GET` and `POST` through the compose stack. Each figure is the median of five runs after warm-up.
+Measured against the compose stack and its PostgreSQL 16 container, one deposit per row and no withdrawals unless stated. `GET` and `POST` figures are the median of five `time.perf_counter` measurements around `urllib` after a warm-up request; the concurrency figures come from a thread pool driving the same endpoints.
 
 | Rows | `GET` | `POST` | `GET` body |
 |---|---|---|---|
-| 1,000 | 21 ms | 69 ms | 74 KB |
-| 10,000 | 133 ms | 514 ms | 749 KB |
-| 50,000 | 609 ms | 2.37 s | 3.8 MB |
-| 205,000 | 2.88 s | 9.68 s | 17 MB, +345 MB RSS |
+| 1,000 | 12 ms | 42 ms | 72 KB |
+| 10,000 | 124 ms | 398 ms | 731 KB |
+| 50,000 | 650 ms | 1.87 s | 3.7 MB |
+| 205,000 | 2.77 s | 7.73 s | 15.0 MB |
 
-Result sets dominate. `GET` serializes every deposit with its full withdrawal history in one response, and `POST` rewrites every row in one transaction, so both grow linearly with the table. Fixed cost per request is 9.90 ms of connect and query.
+Result sets dominate. `GET` serializes every deposit with its full withdrawal history in one response and `POST` rewrites every row in one transaction, so both grow linearly with the table. A fresh connection plus one statement costs 10.13 ms, which was most of the 1,000-row `GET` before pooling.
 
 | Scenario | Result |
 |---|---|
-| 200 parallel `GET` | 84 req/s, all `200` |
-| Parallel `POST` at 1k rows | 16 req/s, then saturated, all `204` |
-| `GET` during a 30k-row `POST` | 13 ms → 405–590 ms while the `POST` holds its locks (4.3 s) |
-| 1 deposit, 100k withdrawals | `GET` 1.13 s / 6.5 MB, `POST` 0.54 s |
-| Connections | one per request before pooling; `max_connections=100`, the 101st is refused |
+| 200 parallel `GET`, 5 rows | 372 req/s, all `200` |
+| 200 parallel `GET`, 1,000 rows | 64 req/s, all `200` |
+| 40 parallel `POST` over 1,000 rows | 17 req/s, all `204` |
+| `GET` during a 30,000-row `POST` | 334 ms idle → 378–497 ms while the `POST` holds its row locks for 4.15 s |
+| 1 deposit, 100,000 withdrawals | `GET` 1.16 s / 6.2 MB, `POST` 576 ms |
+| Backends during 200 parallel `GET` | 11 sessions: ten pooled connections plus the measuring session |
 
-Deliberate limits: no pagination on `GET`, no batching on `POST`, no wire format other than JSON numbers. Each is a documented boundary rather than an omission, and each has a known upgrade path (`LIMIT`/`OFFSET` plus a cursor, chunked commits, minor-unit integers). The connection pool holds `min_size=1, max_size=10` per process, reused across requests, which is why 200 parallel `GET`s never exhaust PostgreSQL's 100 connection slots.
+Deliberate limits: no pagination on `GET`, no batching on `POST`, no wire format other than JSON numbers. Each is a boundary rather than an omission, and each has a known upgrade path (`LIMIT`/`OFFSET` with a cursor, chunked commits, minor-unit integers). The pool holds `min_size=1, max_size=10` connections per process, reused across requests, so request concurrency decouples from PostgreSQL's 100 connection slots: 200 concurrent `GET`s share ten sessions rather than demanding two hundred, and a wide withdrawal history costs serialization time rather than connections.
 
 ### Verify
 
