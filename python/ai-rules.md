@@ -19,6 +19,9 @@ These rules are the custom agent configuration for this repository. Read this fi
 - Expose exactly two operations: `GET /time-deposits` and `POST /time-deposits/update-balances`. No health, create, withdrawal, docs, auth, or CORS routes on the API application.
 - Map HTTP to application services, keep PostgreSQL behind the repository and unit-of-work ports, and construct concrete adapters only at the composition boundary.
 - `TimeDeposit` stays the calculation model; persistence and withdrawal records stay separate.
+- Money is `NUMERIC(18,5)` with a `CHECK` bound of `±1000000000000` on both money columns, the ISO 20022 `ActiveCurrencyAndAmount` grain. Storage never rescales or rounds; `round(..., 2)` fires once per accrual inside the calculator.
+- An accrual that would leave the stored range answers `409` and rolls the whole batch back. The guard lives in the service, not in request validation, because the endpoint has no request body.
+- Database connections come from `psycopg_pool`, one pool per process and DSN, so connection count stays bounded independently of request concurrency.
 
 ## Testing
 

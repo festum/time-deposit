@@ -140,8 +140,40 @@ The contract itself is [`python/openapi.json`](python/openapi.json); load it in 
 |---|---|---|
 | `GET` | `/time-deposits` | `200` with an array of deposits |
 | `POST` | `/time-deposits/update-balances` | `204`, empty body |
+| `POST` | `/time-deposits/update-balances` | `409` when the accrual would leave the stored range |
 
-`GET` returns `id`, `planType`, `balance`, `days`, and `withdrawals`; each withdrawal carries `id`, `timeDepositId`, `amount`, and `date`. Money is a JSON number, dates are `YYYY-MM-DD`.
+`GET` returns `id`, `planType`, `balance`, `days`, and `withdrawals`; each withdrawal carries `id`, `timeDepositId`, `amount`, and `date`. Money is a JSON number, dates are `YYYY-MM-DD`. The `409` body names every offending deposit: `{"detail": "balance limit exceeded", "message": ..., "depositIds": [...]}`.
+
+### Money precision
+
+Both money columns are `NUMERIC(18,5)`. Eighteen digits with five fractional places is the grain of the ISO 20022 `ActiveCurrencyAndAmount` type, and finer than the 2 minor units ISO 4217 fixes for USD, EUR, and TWD. The database stores the value verbatim and returns it verbatim: it never rescales to cents and never rounds. `GET` converts `Decimal` to a JSON number unchanged, so `100.004` reads back as `100.004` and `0.00001` as `0.00001`.
+
+Rounding happens exactly once, inside `TimeDepositCalculator.update_balance`, at the moment a `POST` accrues interest: `round(balance + interest, 2)`. That expression is the starter's own and stays byte-identical. `round` resolves exact binary ties to even, the convention ISO 80000-1 recommends for numeric values, so `150.125` becomes `150.12` rather than `150.13` (pinned by `test_cent_rounding_is_not_half_up`). Values that only look like decimal ties are first represented in binary and then rounded from that representation, which is why `2.675` becomes `2.67` (pinned by `test_ineligible_balance_is_still_rounded`). The two conventions can only disagree on inputs with three or more decimal places, and bank postings are whole minor units, so this shows up only for sub-cent balances that the schema tolerates but no real deposit carries.
+
+`balance` and `amount` also carry `CHECK (... BETWEEN -1000000000000 AND 1000000000000)`. The bound keeps every stored amount inside the ±90,071,992,547,409.91 range where a JSON number is exact, rejects `NaN` and `±Infinity`, and stops values whose exponent overflows `NUMERIC`. A `POST` whose accrual would cross the bound is refused with `409` and rolls back the whole batch, so no deposit changes.
+
+### Scaling limits
+
+Measured on a local Docker Desktop PostgreSQL 16 container, one deposit per row, `GET` and `POST` through the compose stack. Each figure is the median of five runs after warm-up.
+
+| Rows | `GET` | `POST` | `GET` body |
+|---|---|---|---|
+| 1,000 | 21 ms | 69 ms | 74 KB |
+| 10,000 | 133 ms | 514 ms | 749 KB |
+| 50,000 | 609 ms | 2.37 s | 3.8 MB |
+| 205,000 | 2.88 s | 9.68 s | 17 MB, +345 MB RSS |
+
+Result sets dominate. `GET` serializes every deposit with its full withdrawal history in one response, and `POST` rewrites every row in one transaction, so both grow linearly with the table. Fixed cost per request is 9.90 ms of connect and query.
+
+| Scenario | Result |
+|---|---|
+| 200 parallel `GET` | 84 req/s, all `200` |
+| Parallel `POST` at 1k rows | 16 req/s, then saturated, all `204` |
+| `GET` during a 30k-row `POST` | 13 ms → 405–590 ms while the `POST` holds its locks (4.3 s) |
+| 1 deposit, 100k withdrawals | `GET` 1.13 s / 6.5 MB, `POST` 0.54 s |
+| Connections | one per request before pooling; `max_connections=100`, the 101st is refused |
+
+Deliberate limits: no pagination on `GET`, no batching on `POST`, no wire format other than JSON numbers. Each is a documented boundary rather than an omission, and each has a known upgrade path (`LIMIT`/`OFFSET` plus a cursor, chunked commits, minor-unit integers). The connection pool holds `min_size=1, max_size=10` per process, reused across requests, which is why 200 parallel `GET`s never exhaust PostgreSQL's 100 connection slots.
 
 ### Verify
 
@@ -152,9 +184,9 @@ uv run python -m unittest -v test_time_deposit
 uv run pytest -q
 ```
 
-`test_time_deposit.py` pins the calculator contract with literal expected values: eligibility boundaries (`>30`, student `<366`, premium `>45`), unknown and case-mismatched plans, cent rounding with binary floats, ineligible balances still rounded, compounding across calls, in-place mutation with unchanged `id`/`planType`/`days`, empty input, generator input, and no interest leaking between deposits in a batch. `tests/test_api.py` runs against a real PostgreSQL 16 container and covers the seeded listing, commit visibility, read-only listing, an empty database, rollback on failure, absent documentation routes, the two-route set, the exported contract, fractional money handling, and serialization of two overlapping updates with `pg_blocking_pids`.
+`test_time_deposit.py` pins the calculator contract with literal expected values: eligibility boundaries (`>30`, student `<366`, premium `>45`), unknown and case-mismatched plans, cent rounding with binary floats, ineligible balances still rounded, compounding across calls, in-place mutation with unchanged `id`/`planType`/`days`, empty input, generator input, and no interest leaking between deposits in a batch. `tests/test_api.py` runs against a real PostgreSQL 16 container and covers the seeded listing, commit visibility, read-only listing, an empty database, rollback on failure, absent documentation routes, the two-route set, the exported contract, fractional money handling, the `NUMERIC(18,5)` precision and range constraints, the `409` limit response, and serialization of two overlapping updates with `pg_blocking_pids`.
 
-`uv run pytest` reports branch coverage for the six application modules and fails below 95%. The current suite measures 100% of 156 statements and 18 branches; `uv run coverage report --format=markdown` renders the same table.
+`uv run pytest` reports branch coverage for the six application modules and fails below 95%. The current suite measures 100% of 199 statements and 24 branches; `uv run coverage report --format=markdown` renders the same table.
 
 ### Continuous integration
 
@@ -165,7 +197,9 @@ uv run pytest -q
 - One `POST` applies exactly one monthly accrual to every deposit. It is not idempotent and does not advance `days`.
 - Withdrawals are historical records already reflected in the stored balance; the API reports them and never recalculates them.
 - Balances are read from PostgreSQL as `Decimal`, converted to `float` only for the legacy calculator, and written back as `Decimal(str(result))`, so the calculator's own rounding is the only rounding applied.
-- Stored `NUMERIC` is unconstrained, so a value like `100.004` reaches the calculator unrounded and produces `100.09`.
+- `NUMERIC(18,5)` stores five fractional places without rescaling them, so a value like `100.004` reaches the calculator unrounded and produces `100.09`.
+- The `±1000000000000` bound is a business cap, not an arithmetic limit: it keeps every amount inside the range where a JSON number is exact and gives overflow a defined `409` instead of a database error.
+- The connection pool is per process with `min_size=1` and `max_size=10`; scaling out means adding processes, not raising the size against a shared 100-connection server.
 - Unknown plan types earn no interest but still receive the calculator's final rounding.
 - The update transaction locks the deposit rows with `FOR UPDATE` before calculating, which serializes overlapping updates instead of losing one.
 
