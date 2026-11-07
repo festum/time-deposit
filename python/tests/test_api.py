@@ -120,21 +120,22 @@ def test_connection_is_postgresql(connection):
 def test_schema_contract(connection):
     rows = connection.execute(
         """
-        SELECT table_name, column_name, data_type
+        SELECT table_name, column_name, data_type,
+               numeric_precision, numeric_scale, is_nullable
         FROM information_schema.columns
         WHERE table_name IN ('timeDeposits', 'withdrawals')
         ORDER BY table_name, ordinal_position
         """
     ).fetchall()
     assert rows == [
-        ('timeDeposits', 'id', 'integer'),
-        ('timeDeposits', 'planType', 'text'),
-        ('timeDeposits', 'days', 'integer'),
-        ('timeDeposits', 'balance', 'numeric'),
-        ('withdrawals', 'id', 'integer'),
-        ('withdrawals', 'timeDepositId', 'integer'),
-        ('withdrawals', 'amount', 'numeric'),
-        ('withdrawals', 'date', 'date'),
+        ('timeDeposits', 'id', 'integer', 32, 0, 'NO'),
+        ('timeDeposits', 'planType', 'text', None, None, 'NO'),
+        ('timeDeposits', 'days', 'integer', 32, 0, 'NO'),
+        ('timeDeposits', 'balance', 'numeric', 18, 5, 'NO'),
+        ('withdrawals', 'id', 'integer', 32, 0, 'NO'),
+        ('withdrawals', 'timeDepositId', 'integer', 32, 0, 'NO'),
+        ('withdrawals', 'amount', 'numeric', 18, 5, 'NO'),
+        ('withdrawals', 'date', 'date', None, None, 'NO'),
     ]
 
     foreign_key = connection.execute(
@@ -149,6 +150,91 @@ def test_schema_contract(connection):
         """
     ).fetchall()
     assert foreign_key == [('timeDepositId', 'timeDeposits', 'id')]
+
+    checks = connection.execute(
+        """
+        SELECT cc.conname, pg_get_constraintdef(cc.oid)
+        FROM pg_constraint AS cc
+        JOIN pg_class AS c ON c.oid = cc.conrelid
+        WHERE cc.contype = 'c'
+          AND cc.conname IN ('time_deposits_balance_range', 'withdrawals_amount_range')
+        ORDER BY cc.conname
+        """
+    ).fetchall()
+    assert [name for name, _ in checks] == [
+        'time_deposits_balance_range',
+        'withdrawals_amount_range',
+    ]
+    for _, definition in checks:
+        assert "('-1000000000000'::bigint)::numeric" in definition
+        assert "('1000000000000'::bigint)::numeric" in definition
+        assert definition.startswith('CHECK (((')
+
+
+@pytest.mark.parametrize(
+    'value',
+    [
+        Decimal('1000000000000.00001'),
+        Decimal('-1000000000000.00001'),
+        Decimal('NaN'),
+        Decimal('Infinity'),
+        Decimal('-Infinity'),
+        Decimal('1e400'),
+    ],
+    ids=str,
+)
+def test_money_columns_reject_out_of_range_and_non_finite_values(connection, value):
+    reset(connection)
+    insert(connection, [(1, 'basic', Decimal('1200'), 31)])
+
+    with pytest.raises(psycopg.Error):
+        connection.execute(
+            'INSERT INTO "timeDeposits" ("planType", balance, days) VALUES (%s, %s, 31)',
+            ('basic', value),
+        )
+    connection.rollback()
+
+    with pytest.raises(psycopg.Error):
+        connection.execute('UPDATE "timeDeposits" SET balance = %s WHERE id = 1', (value,))
+    connection.rollback()
+
+    assert stored_rows(connection)[0] == [(1, 'basic', Decimal('1200.00000'), 31)]
+
+
+@pytest.mark.parametrize(
+    'value',
+    [Decimal('1000000000000'), Decimal('-1000000000000'), Decimal('999999999999.99999')],
+    ids=str,
+)
+def test_money_columns_accept_the_bounds(connection, value):
+    reset(connection)
+    insert(connection, [(1, 'basic', Decimal('1200'), 31)])
+
+    connection.execute('UPDATE "timeDeposits" SET balance = %s WHERE id = 1', (value,))
+    connection.commit()
+
+    assert connection.execute('SELECT balance FROM "timeDeposits"').fetchone()[0] == value
+
+
+def test_money_columns_keep_five_decimal_places(connection):
+    reset(connection)
+    connection.execute(
+        'INSERT INTO "timeDeposits" (id, "planType", balance, days) VALUES (%s, %s, %s, 31)',
+        (1, 'basic', Decimal('1234.56789')),
+    )
+    connection.execute(
+        'INSERT INTO withdrawals (id, "timeDepositId", amount, date) VALUES (%s, %s, %s, %s)',
+        (1, 1, Decimal('0.00001'), '2026-02-01'),
+    )
+    connection.commit()
+
+    balance = connection.execute('SELECT balance FROM "timeDeposits"').fetchone()[0]
+    amount = connection.execute('SELECT amount FROM withdrawals').fetchone()[0]
+
+    assert balance == Decimal('1234.56789')
+    assert amount == Decimal('0.00001')
+    assert balance.as_tuple().exponent == -5
+    assert amount.as_tuple().exponent == -5
 
 
 def test_list_returns_seeded_deposits(seeded, client):
@@ -334,12 +420,45 @@ def test_fractional_balances_round_at_the_calculator_boundary(database_url, conn
     assert [row[0] for row in amounts] == [Decimal('25.125')]
 
 
+def test_accrual_beyond_the_stored_range_conflicts_without_writing(seeded, database_url, connection):
+    insert(connection, [(6, 'basic', Decimal('999999999999.99'), 31)])
+    connection.commit()
+    before = stored_rows(connection)
+    service = TimeDepositService(lambda: PostgresUnitOfWork(database_url), TimeDepositCalculator())
+
+    with TestClient(create_app(service)) as client:
+        response = client.post('/time-deposits/update-balances')
+
+    assert response.status_code == 409
+    assert response.json() == {
+        'detail': 'balance limit exceeded',
+        'message': (
+            'accrual would move deposits [6] outside the stored range '
+            '-1000000000000..1000000000000'
+        ),
+        'depositIds': [6],
+    }
+    with psycopg.connect(database_url) as independent:
+        assert stored_rows(independent) == before
+
+    connection.execute('DELETE FROM "timeDeposits" WHERE id = 6')
+    connection.commit()
+
+    with TestClient(create_app(service)) as client:
+        assert client.post('/time-deposits/update-balances').status_code == 204
+    with psycopg.connect(database_url) as independent:
+        balances = independent.execute('SELECT balance FROM "timeDeposits" ORDER BY id').fetchall()
+    assert [row[0] for row in balances] == [
+        Decimal('1201'), Decimal('1203'), Decimal('1205'), Decimal('1200'), Decimal('1200')
+    ]
+
+
 class PidUnitOfWork(PostgresUnitOfWork):
     pid: int
 
     def __enter__(self):
         super().__enter__()
-        self.pid = self._context.execute('SELECT pg_backend_pid()').fetchone()[0]
+        self.pid = self._connection.execute('SELECT pg_backend_pid()').fetchone()[0]
         return self
 
 
