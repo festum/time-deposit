@@ -263,6 +263,59 @@ def test_list_returns_seeded_deposits(seeded, client):
             assert_json_number(withdrawal['id'])
 
 
+def test_withdrawals_are_ordered_by_date_then_id(database_url, connection):
+    reset(connection)
+    insert(
+        connection,
+        [(1, 'basic', Decimal('1200'), 31)],
+        [
+            (10, 1, Decimal('10'), '2026-03-05'),
+            (11, 1, Decimal('11'), '2026-01-10'),
+            (21, 1, Decimal('21'), '2026-02-01'),
+            (20, 1, Decimal('20'), '2026-02-01'),
+        ],
+    )
+    connection.commit()
+    service = TimeDepositService(lambda: PostgresUnitOfWork(database_url), TimeDepositCalculator())
+
+    with TestClient(create_app(service)) as client:
+        payload = client.get('/time-deposits').json()
+
+    assert [withdrawal['id'] for withdrawal in payload[0]['withdrawals']] == [11, 20, 21, 10]
+    assert [withdrawal['date'] for withdrawal in payload[0]['withdrawals']] == [
+        '2026-01-10',
+        '2026-02-01',
+        '2026-02-01',
+        '2026-03-05',
+    ]
+
+
+def test_zero_and_negative_balances_accrue(database_url, connection):
+    reset(connection)
+    insert(
+        connection,
+        [
+            (1, 'basic', Decimal('0'), 31),
+            (2, 'basic', Decimal('-1200'), 31),
+            (3, 'premium', Decimal('-1200'), 46),
+        ],
+    )
+    connection.commit()
+    service = TimeDepositService(lambda: PostgresUnitOfWork(database_url), TimeDepositCalculator())
+
+    with TestClient(create_app(service)) as client:
+        assert [entry['balance'] for entry in client.get('/time-deposits').json()] == [0.0, -1200.0, -1200.0]
+        assert client.post('/time-deposits/update-balances').status_code == 204
+        payload = client.get('/time-deposits').json()
+
+    assert [entry['balance'] for entry in payload] == [0.0, -1201.0, -1205.0]
+    for entry in payload:
+        assert_json_number(entry['balance'])
+    with psycopg.connect(database_url) as independent:
+        balances = independent.execute('SELECT balance FROM "timeDeposits" ORDER BY id').fetchall()
+    assert [row[0] for row in balances] == [Decimal('0'), Decimal('-1201'), Decimal('-1205')]
+
+
 def test_update_applies_one_accrual_and_commits(seeded, client, database_url):
     response = client.post('/time-deposits/update-balances')
 

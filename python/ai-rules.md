@@ -22,6 +22,7 @@ These rules are the custom agent configuration for this repository. Read this fi
 - Money is `NUMERIC(18,5)` with a `CHECK` bound of `±1000000000000` on both money columns, the ISO 20022 `ActiveCurrencyAndAmount` grain. Storage never rescales or rounds; `round(..., 2)` fires once per accrual inside the calculator.
 - An accrual that would leave the stored range answers `409` and rolls the whole batch back. The guard lives in the service, not in request validation, because the endpoint has no request body.
 - Database connections come from `psycopg_pool`, one pool per process and DSN, so connection count stays bounded independently of request concurrency.
+- The kata asks for ambiguous assumptions to be justified in code comments. Comment exactly where a reader would otherwise misread the behaviour: one accrual per call and not idempotent, withdrawals as history rather than a replayable ledger, float as the calculation path with `NUMERIC(18,5)` preserving its input, and row locks as the serialization mechanism. Everywhere else, rationale stays in the README and the endpoint descriptions.
 
 ## Testing
 

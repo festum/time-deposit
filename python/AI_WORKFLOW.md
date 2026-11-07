@@ -58,7 +58,7 @@ uv run pytest -q
 uv run pytest -q --cov-report=xml --cov-report=term-missing
 ```
 
-`unittest` ran 9 tests before the calculator refactor (expected values cross-checked against the untouched starter) and again after it, both `OK`. The extension test passed once the policy seam existed. `uv run pytest -q` ran 35 tests plus 31 subtests: 25 of them against a Testcontainers PostgreSQL 16 instance, the rest covering the calculator, the policies, the exporter, and the default `DATABASE_URL` wiring.
+`unittest` ran 9 tests before the calculator refactor (expected values cross-checked against the untouched starter) and again after it, both `OK`. The extension test passed once the policy seam existed. `uv run pytest -q` ran 37 tests plus 31 subtests: 27 of them against a Testcontainers PostgreSQL 16 instance, the rest covering the calculator, the policies, the exporter, and the default `DATABASE_URL` wiring. A final pass added two integration cases whose oracles the earlier suite could not distinguish: withdrawal ordering (`date` then `id`, with ids deliberately out of date order so an `ORDER BY w.id` swap fails the assertion) and zero plus negative balances (`0` stays `0`, `-1200` becomes `-1201` and `-1205`).
 
 `uv run pytest -q` now runs with branch coverage by default (`addopts` in `pyproject.toml`) over `api`, `application`, `export_openapi`, `interest_policies`, `postgres`, and `time_deposit`: 199 statements, 24 branches, 100% covered, `Required test coverage of 95.0% reached`. Running a single test file fails the gate as intended: `uv run pytest -q tests/test_interest_extension.py` ends with `FAIL Required test coverage of 95.0% not reached. Total coverage: 55.21%` and exit status 1, so a partial run cannot pass silently.
 
@@ -87,6 +87,10 @@ Each variant was applied alone, the suite rerun, and the code restored:
 | Skipping the final rounding for zero interest | `2.67 != 2.675` |
 
 Every variant was caught, so no test needed strengthening.
+
+## Fault detection on the new oracles
+
+The two integration cases added in the final pass were checked against a deliberately broken adapter rather than assumed to be sensitive. Changing `ORDER BY d.id, w.date, w.id` to `ORDER BY d.id, w.id` in `PostgresDepositRepository.list_all` makes `test_withdrawals_are_ordered_by_date_then_id` fail with `assert [10, 11, 20, 21] == [11, 20, 21, 10]`; the fixture ids are deliberately out of date order for that reason. The change was reverted immediately afterwards and the suite re-run green.
 
 ## Corrections during the session
 
