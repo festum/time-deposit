@@ -8,3 +8,7 @@ __pycache__/
 .idea/
 package-lock.json
 .vscode/
+.venv/
+.pytest_cache/
+.env
+.coverage

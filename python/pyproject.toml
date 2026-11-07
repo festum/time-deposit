@@ -1,0 +1,23 @@
+[project]
+name = "time-deposit"
+version = "0.1.0"
+description = "Time deposit API for the XA Bank refactoring kata"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "psycopg[binary]",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "httpx",
+    "testcontainers[postgres]",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
