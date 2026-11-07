@@ -1,12 +1,5 @@
-node_modules/
-target/
 .DS_Store
-bin/
-obj/
 __pycache__/
-.vs/
-.idea/
-package-lock.json
 .vscode/
 .venv/
 .pytest_cache/

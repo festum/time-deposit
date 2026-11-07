@@ -53,6 +53,9 @@ class PostgresDepositRepository:
         self._connection = connection
 
     def list_all(self, *, for_update: bool = False) -> list[DepositView]:
+        # Locking ids in one statement before the joined read is what makes overlapping accruals
+        # serialize instead of losing an update. A single SELECT ... FOR UPDATE over the join would
+        # lock withdrawal rows too and still leave the ordering of concurrent batches to chance.
         if for_update:
             self._connection.execute('SELECT id FROM "timeDeposits" ORDER BY id FOR UPDATE').fetchall()
         rows = self._connection.execute(

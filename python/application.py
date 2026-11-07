@@ -38,6 +38,9 @@ class BalanceLimitExceeded(Exception):
 
 
 class DepositRepository(Protocol):
+    # Withdrawal rows are history already reflected in the stored balance. They are reported with
+    # the deposit and never subtracted again, because the kata stores the current amount rather
+    # than replaying a ledger.
     def list_all(self, *, for_update: bool = False) -> list[DepositView]:
         ...
 
@@ -69,7 +72,12 @@ class TimeDepositService:
             return uow.repository.list_all()
 
     def update_balances(self) -> None:
+        # One call is one monthly accrual, and it is deliberately not idempotent: `days` never
+        # advances, so the caller decides when a month has passed and every success compounds.
         with self._uow_factory() as uow:
+            # NUMERIC(18,5) reaches the calculator as float and comes back through
+            # Decimal(str(...)), so storage preserves the input verbatim and the calculator's
+            # own round(..., 2) stays the only place a cent boundary is decided.
             deposits = [
                 TimeDeposit(deposit.id, deposit.planType, float(deposit.balance), deposit.days)
                 for deposit in uow.repository.list_all(for_update=True)
