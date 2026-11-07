@@ -2,13 +2,17 @@ from __future__ import annotations
 
 import datetime
 import os
+from typing import Literal
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from application import DepositView, TimeDepositService
+from application import BalanceLimitExceeded, DepositView, TimeDepositService
 from postgres import PostgresUnitOfWork
 from time_deposit import TimeDepositCalculator
+
+BALANCE_LIMIT = '1000000000000'
 
 
 class WithdrawalResponse(BaseModel):
@@ -24,6 +28,12 @@ class DepositResponse(BaseModel):
     balance: float
     days: int
     withdrawals: list[WithdrawalResponse]
+
+
+class BalanceLimitResponse(BaseModel):
+    detail: Literal['balance limit exceeded']
+    message: str
+    depositIds: list[int]
 
 
 def _to_response(deposit: DepositView) -> DepositResponse:
@@ -61,6 +71,17 @@ def create_app(service: TimeDepositService | None = None) -> FastAPI:
         redirect_slashes=False,
     )
 
+    @app.exception_handler(BalanceLimitExceeded)
+    def balance_limit_exceeded(request: Request, error: BalanceLimitExceeded) -> JSONResponse:
+        return JSONResponse(
+            status_code=409,
+            content=BalanceLimitResponse(
+                detail='balance limit exceeded',
+                message=str(error),
+                depositIds=error.deposit_ids,
+            ).model_dump(),
+        )
+
     @app.get(
         "/time-deposits",
         operation_id="listTimeDeposits",
@@ -88,8 +109,19 @@ def create_app(service: TimeDepositService | None = None) -> FastAPI:
             "days, premium 5% after 45 days; no interest applies within the first 30 days, and an "
             "unknown plan type earns none. Deposit `days` never changes and withdrawal rows are not "
             "touched. The call is not idempotent: each success adds another accrual permanently. "
-            "Responds with an empty body."
+            f"Balances are stored as NUMERIC(18,5) bounded to ±{BALANCE_LIMIT}; if the accrual would "
+            "move any deposit outside that range the whole batch is rejected with 409 and nothing is "
+            "written. Responds with an empty body."
         ),
+        responses={
+            409: {
+                'model': BalanceLimitResponse,
+                'description': (
+                    "The accrual would move at least one balance outside the stored range "
+                    f"±{BALANCE_LIMIT}. The transaction rolls back, so no deposit changes."
+                ),
+            },
+        },
     )
     def update_time_deposit_balances():
         service.update_balances()

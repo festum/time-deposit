@@ -1,6 +1,33 @@
 {
   "components": {
     "schemas": {
+      "BalanceLimitResponse": {
+        "properties": {
+          "depositIds": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Depositids",
+            "type": "array"
+          },
+          "detail": {
+            "const": "balance limit exceeded",
+            "title": "Detail",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail",
+          "message",
+          "depositIds"
+        ],
+        "title": "BalanceLimitResponse",
+        "type": "object"
+      },
       "DepositResponse": {
         "properties": {
           "balance": {
@@ -99,11 +126,21 @@
     },
     "/time-deposits/update-balances": {
       "post": {
-        "description": "Applies exactly one monthly accrual to every stored deposit, in a single transaction that locks the deposit rows. Interest is monthly: basic 1%, student 3% while under 366 days, premium 5% after 45 days; no interest applies within the first 30 days, and an unknown plan type earns none. Deposit `days` never changes and withdrawal rows are not touched. The call is not idempotent: each success adds another accrual permanently. Responds with an empty body.",
+        "description": "Applies exactly one monthly accrual to every stored deposit, in a single transaction that locks the deposit rows. Interest is monthly: basic 1%, student 3% while under 366 days, premium 5% after 45 days; no interest applies within the first 30 days, and an unknown plan type earns none. Deposit `days` never changes and withdrawal rows are not touched. The call is not idempotent: each success adds another accrual permanently. Balances are stored as NUMERIC(18,5) bounded to \u00b11000000000000; if the accrual would move any deposit outside that range the whole batch is rejected with 409 and nothing is written. Responds with an empty body.",
         "operationId": "updateTimeDepositBalances",
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BalanceLimitResponse"
+                }
+              }
+            },
+            "description": "The accrual would move at least one balance outside the stored range \u00b11000000000000. The transaction rolls back, so no deposit changes."
           }
         },
         "summary": "Apply one monthly interest accrual to every deposit"

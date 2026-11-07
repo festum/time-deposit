@@ -8,6 +8,8 @@ from typing import Protocol, Self
 
 from time_deposit import TimeDeposit, TimeDepositCalculator
 
+MAX_BALANCE = Decimal('1000000000000')
+
 
 @dataclass(frozen=True)
 class Withdrawal:
@@ -24,6 +26,15 @@ class DepositView:
     balance: Decimal
     days: int
     withdrawals: list[Withdrawal]
+
+
+class BalanceLimitExceeded(Exception):
+    def __init__(self, deposit_ids: Sequence[int]) -> None:
+        self.deposit_ids = list(deposit_ids)
+        super().__init__(
+            f"accrual would move deposits {self.deposit_ids} outside "
+            f"the stored range -{MAX_BALANCE}..{MAX_BALANCE}"
+        )
 
 
 class DepositRepository(Protocol):
@@ -64,4 +75,7 @@ class TimeDepositService:
                 for deposit in uow.repository.list_all(for_update=True)
             ]
             self._calculator.update_balance(deposits)
+            overflowing = [deposit.id for deposit in deposits if abs(deposit.balance) > MAX_BALANCE]
+            if overflowing:
+                raise BalanceLimitExceeded(overflowing)
             uow.repository.save_balances(deposits)
