@@ -4,7 +4,7 @@ import datetime
 import os
 from typing import Literal
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -102,6 +102,7 @@ def create_app(service: TimeDepositService | None = None) -> FastAPI:
         "/time-deposits/update-balances",
         operation_id="updateTimeDepositBalances",
         status_code=204,
+        response_class=Response,
         summary="Apply one monthly interest accrual to every deposit",
         description=(
             "Applies exactly one monthly accrual to every stored deposit, in a single transaction "

@@ -321,6 +321,7 @@ def test_update_applies_one_accrual_and_commits(seeded, client, database_url):
 
     assert response.status_code == 204
     assert response.content == b''
+    assert 'content-type' not in response.headers, response.headers
 
     payload = client.get('/time-deposits').json()
     assert [entry['balance'] for entry in payload] == BALANCES_AFTER_ONE_ACCRUAL

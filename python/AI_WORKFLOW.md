@@ -94,6 +94,8 @@ Every variant was caught, so no test needed strengthening.
 
 The two integration cases added in the final pass were checked against a deliberately broken adapter rather than assumed to be sensitive. Changing `ORDER BY d.id, w.date, w.id` to `ORDER BY d.id, w.id` in `PostgresDepositRepository.list_all` makes `test_withdrawals_are_ordered_by_date_then_id` fail with `assert [10, 11, 20, 21] == [11, 20, 21, 10]`; the fixture ids are deliberately out of date order for that reason. The change was reverted immediately afterwards and the suite re-run green.
 
+The `204` shape was found the same way, by looking at a real response rather than the declared one. Removing `response_class=Response` from the `POST` route leaves Starlette's default `JSONResponse` in place, so the reply carries `content-type: application/json` beside an empty body; the assertion `'content-type' not in response.headers` fails with `AssertionError: Headers({'content-type': 'application/json'})`. Restoring the argument makes it pass. The earlier test checked the status and the empty body and was blind to the header, which is why a manual `curl -i` found it first.
+
 ## Corrections during the session
 
 - The first policy module was written with a registry entry outside the dictionary by mistake; the file failed to parse and was rewritten in full instead of patched.

@@ -89,6 +89,7 @@ Provenance: forked from [ikigai-digital/time-deposit-take-home-kata](https://git
 | `python/openapi.json` | Exported OpenAPI 3.1 contract |
 | `python/sql/` | Schema and demo fixtures |
 | `python/tests/` | Testcontainers PostgreSQL integration tests |
+| `python/INTERVIEW_QA.md` | Walkthrough notes: frozen items, behaviour boundaries, test layering, fault injection, likely questions |
 | `compose.yaml` | Database, API, and Swagger UI |
 
 Hexagonal split: the calculator and policies know nothing about HTTP or SQL, the service depends only on the ports, and the FastAPI and Psycopg adapters are constructed at the edges.
@@ -139,7 +140,7 @@ The contract itself is [`python/openapi.json`](python/openapi.json); load it in 
 | Method | Path | Response |
 |---|---|---|
 | `GET` | `/time-deposits` | `200` with an array of deposits |
-| `POST` | `/time-deposits/update-balances` | `204`, empty body |
+| `POST` | `/time-deposits/update-balances` | `204`, empty body, no `content-type` |
 | `POST` | `/time-deposits/update-balances` | `409` when the accrual would leave the stored range |
 
 `GET` returns `id`, `planType`, `balance`, `days`, and `withdrawals`; each withdrawal carries `id`, `timeDepositId`, `amount`, and `date`. Money is a JSON number, dates are `YYYY-MM-DD`. The `409` body names every offending deposit: `{"detail": "balance limit exceeded", "message": ..., "depositIds": [...]}`.
