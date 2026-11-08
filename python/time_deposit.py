@@ -18,3 +18,4 @@ class TimeDepositCalculator:
             if policy is not None:
                 interest += policy.interest(td)
             td.balance = round(td.balance + ((interest * 100) / 100), 2)
+
